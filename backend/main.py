@@ -1,93 +1,102 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import joblib
-import pandas as pd
 import os
+import sys
 
-# Setup paths to find the saved model
+# --- Enterprise Setup ---
+# Add the project base directory to sys.path so we can import from ml_engine
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MODEL_PATH = os.path.join(BASE_DIR, "ml_engine", "saved_models", "flare_predictor_v1.pkl")
+sys.path.append(BASE_DIR)
 
-# Initialize FastAPI app
-app = FastAPI(title="Aditya-L1 S.F.E.W.S API", description="Backend for Solar Flare Early Warning System")
+# Import the new, modular Inference Engine Controller
+# This single import brings in the model, physics rules, and XAI logic.
+from ml_engine.inference import FlarePredictorEngine
 
-# Allow CORS so your frontend index.html can communicate with this API securely
+# --- App & Resource Initialization ---
+app = FastAPI(
+    title="Aditya-L1 S.F.E.W.S Enterprise API",
+    description="Modular Backend for Solar Flare Early Warning System"
+)
+
+# Allow CORS so your frontend (localhost:8080) can communicate with this API (localhost:8000)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins for hackathon local testing
+    allow_origins=["*"],  # Allows all origins for local development
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Load the trained model at startup
-model = None
-try:
-    if os.path.exists(MODEL_PATH):
-        model = joblib.load(MODEL_PATH)
-        print(f"✅ AI Model loaded successfully from {MODEL_PATH}")
-    else:
-        print(f"⚠️ Warning: Model not found at {MODEL_PATH}. Run train_model.py first.")
-except Exception as e:
-    print(f"❌ Error loading model: {e}")
+# Initialize the ML Engine Core once at startup
+print("⚙️ Initializing Aditya-L1 AI Core...")
+ml_engine = FlarePredictorEngine()
+print("✅ AI Core Online and Ready.")
 
 
+# --- Data Models ---
 # Define the expected incoming JSON data structure from the dashboard
 class TelemetryData(BaseModel):
     soft_xray_counts: float
     soft_xray_derivative: float
     soft_to_hard_ratio: float
 
+
+# --- API Endpoints ---
 @app.get("/")
 def read_root():
     """Health check endpoint to verify the server is running."""
-    return {"status": "Aditya-L1 Backend API is Online and Nominal."}
+    return {"status": "Aditya-L1 Enterprise Backend API is Online."}
 
 @app.post("/api/predict")
-def predict_flare(data: TelemetryData):
+async def predict_flare(data: TelemetryData):
     """
-    Receives live telemetry features, feeds them to the Random Forest model,
-    and returns the probability of a flare in the next 30 minutes.
+    Main inference endpoint.
+    Receives live telemetry features and passes them to the modular inference engine.
     """
-    if model is None:
-        raise HTTPException(status_code=500, detail="AI Model is offline.")
-    
     try:
-        # Convert incoming JSON data to a Pandas DataFrame for the ML model
-        # We use .model_dump() for Pydantic v2 compatibility
-        df = pd.DataFrame([data.model_dump() if hasattr(data, 'model_dump') else data.dict()])
+        print(f"\n📡 Received Telemetry: {data}")
         
-        # Predict probability of classes (0: Quiet Sun, 1: Flare Imminent)
-        probabilities = model.predict_proba(df)[0]
+        # --- THE FIX ---
+        # Safely convert the Pydantic object to a dictionary.
+        # This prevents crashes whether you have Pydantic V1 or V2 installed!
+        data_dict = data.model_dump() if hasattr(data, 'model_dump') else data.dict()
         
-        quiet_prob = round(probabilities[0] * 100, 2)
-        flare_prob = round(probabilities[1] * 100, 2)
+        # Pass the dictionary to the engine's predict method
+        response = ml_engine.predict(data_dict)
         
-        # Extrapolate granular threat levels based on the binary model output
-        # (This translates the AI's binary logic into the B, C, M, X UI bars)
-        response_data = {
-            "status": "success",
-            "ai_confidence": {
-                "quiet_sun": quiet_prob,
-                "flare_imminent": flare_prob
-            },
-            "threat_levels": {
-                "b_class": max(10, quiet_prob), # Always some baseline B-class activity
-                "c_class": flare_prob * 0.8,
-                "m_class": flare_prob * 0.5,
-                "x_class": flare_prob * 0.2 if flare_prob > 80 else 1.0 # Only high if imminent is huge
-            },
-            "global_state": "CRITICAL" if flare_prob > 80 else "WARNING" if flare_prob > 40 else "NOMINAL"
+        if response.get("status") == "error":
+            print(f"⚠️ Engine Error: {response.get('message')}")
+            # Handle physics validation errors (e.g., negative sensor values)
+            raise HTTPException(status_code=400, detail=response.get("message", "Unknown error"))
+        
+        # The new inference.py returns raw probabilities, but the frontend UI 
+        # needs the granular "threat_levels" to draw the progress bars.
+        # We reconstruct them here so the UI doesn't crash and fall back.
+        flare_prob = response.get("probabilities", {}).get("flare", 0)
+        quiet_prob = response.get("probabilities", {}).get("quiet", 100)
+        
+        response["threat_levels"] = {
+            "b_class": max(10, quiet_prob), 
+            "c_class": flare_prob * 0.8,
+            "m_class": flare_prob * 0.5,
+            "x_class": flare_prob * 0.2 if flare_prob > 80 else 1.0 
         }
         
-        return response_data
+        # Add a flag to prove to the frontend that this is real AI data
+        response["source"] = "real_time_ai_inference"
+        
+        print(f"✅ Prediction Successful! State: {response.get('global_state')}")
+        return response
         
     except Exception as e:
+        # If something crashes, print it to the terminal so we can debug it
+        print(f"❌ Prediction Error in API: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn
     # Run the server on port 8000
-    print("🚀 Starting Aditya-L1 Mission Control Server...")
+    print("🚀 Starting Mission Control Server...")
+    # Host 0.0.0.0 makes it accessible on your local network
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
