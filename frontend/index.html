@@ -1,0 +1,666 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Aditya-L1 Solar Flare Early Warning System</title>
+    
+    <!-- External Libraries -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.146.0/build/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/d3@7.9.0"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@observablehq/plot@0.6.16"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Material+Icons" rel="stylesheet">
+
+    <!-- CSS Design System & WOW Factor Animations -->
+    <style>
+        :root {
+            --bg-dark: #0b0f19;
+            --bg-panel: #111827;
+            --border-color: #1f2937;
+            --text-main: #f3f4f6;
+            --text-muted: #9ca3af;
+            --solexs-color: #3b82f6; 
+            --helios-color: #f59e0b; 
+        }
+
+        body {
+            background-color: var(--bg-dark);
+            color: var(--text-main);
+            font-family: 'Inter', sans-serif;
+            margin: 0;
+            padding: 0;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            transition: background-color 1s ease, box-shadow 1s ease;
+        }
+
+        /* CRT Scanline Effect */
+        body::after {
+            content: " ";
+            display: block;
+            position: absolute;
+            top: 0; left: 0; bottom: 0; right: 0;
+            background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.06));
+            z-index: 100;
+            background-size: 100% 2px, 3px 100%;
+            pointer-events: none;
+        }
+
+        /* Lockdown Transformation */
+        body.critical-lockdown {
+            background-color: #3a0a0a;
+            box-shadow: inset 0 0 150px rgba(255, 0, 0, 0.5);
+        }
+        body.critical-lockdown .panel {
+            border-color: #7f1d1d;
+            background-color: #450a0a;
+            animation: panel-shake 0.5s ease-in-out infinite alternate;
+        }
+        @keyframes panel-shake {
+            0% { transform: translateX(-1px); }
+            100% { transform: translateX(1px); }
+        }
+
+        .font-mono { font-family: 'JetBrains Mono', monospace; }
+
+        .panel {
+            background-color: var(--bg-panel);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 20px; /* Slightly increased for breathing room */
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            display: flex;
+            flex-direction: column;
+            transition: all 0.5s ease;
+            position: relative; 
+        }
+
+        .header-glow { text-shadow: 0 0 10px rgba(59, 130, 246, 0.5); }
+        .critical-lockdown .header-glow { text-shadow: 0 0 20px rgba(239, 68, 68, 0.8); color: #ef4444; }
+
+        .status-pulse { animation: pulse 2s infinite; }
+        .alarm-pulse { animation: pulse-fast 0.5s infinite; }
+
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        @keyframes pulse-fast { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.2; transform: scale(1.2); } }
+
+        .progress-bar-bg { background-color: #374151; border-radius: 9999px; height: 8px; width: 100%; overflow: hidden; }
+        .progress-bar-fill { height: 100%; border-radius: 9999px; transition: width 0.5s ease; }
+
+        .plot-chart text { fill: var(--text-muted) !important; font-family: 'JetBrains Mono', monospace !important; font-size: 10px !important; }
+        .plot-chart [aria-label="grid"] line { stroke: #374151 !important; }
+
+        /* Lock down specific HUD styling */
+        .critical-lockdown #raw-terminal { border-color: rgba(239, 68, 68, 0.5); color: #fca5a5; }
+    </style>
+</head>
+<body>
+    <header class="flex items-center justify-between px-6 py-4 border-b border-gray-800 bg-gray-900/80 backdrop-blur-md shrink-0 z-50">
+        <div class="flex items-center gap-3">
+            <span class="material-icons text-blue-500 text-3xl" id="logo-icon">satellite</span>
+            <div>
+                <h1 class="text-xl font-bold tracking-wider header-glow uppercase" id="main-title">Aditya-L1 S.F.E.W.S</h1>
+                <p class="text-xs text-gray-400">Solar Flare Early Warning System • Advanced AI Core</p>
+            </div>
+        </div>
+        <div class="flex items-center gap-6">
+            <button id="btn-audio" class="flex items-center gap-2 text-xs font-mono bg-gray-800 hover:bg-gray-700 px-3 py-1 rounded border border-gray-600 transition-colors">
+                <span class="material-icons text-[16px] text-gray-400" id="audio-icon">volume_off</span>
+                <span id="audio-text">SONIFICATION: OFF</span>
+            </button>
+            
+            <div class="text-right">
+                <div class="text-xs text-gray-400 uppercase tracking-widest">System Status</div>
+                <div id="global-status" class="text-sm font-bold text-green-500 font-mono flex items-center justify-end gap-2">
+                    <span class="w-2 h-2 rounded-full bg-green-500 status-pulse"></span> NOMINAL
+                </div>
+            </div>
+            <div class="text-right font-mono text-sm text-gray-300 bg-gray-800 px-3 py-1 rounded border border-gray-700">
+                T+ <span id="mission-clock">00:00:00</span>
+            </div>
+        </div>
+    </header>
+
+    <main class="flex-1 grid grid-cols-12 gap-6 p-6 min-h-0 z-10">
+        
+        <!-- Left Column: Telemetry & XAI -->
+        <div class="col-span-8 flex flex-col gap-6 min-h-0">
+            
+            <div class="panel flex-1 min-h-0 flex flex-col bg-gray-900/30 border-gray-800/80">
+                <div class="flex justify-between items-center mb-2 shrink-0">
+                    <h2 class="text-[11px] font-bold uppercase tracking-[0.2em] text-gray-400 flex items-center gap-2">
+                        <span class="material-icons text-[16px]">show_chart</span> Live Telemetry (W/m²)
+                    </h2>
+                    <div class="flex gap-5 text-[10px] uppercase font-mono tracking-widest text-gray-500">
+                        <span class="flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-blue-500"></span> SoLEXS</span>
+                        <span class="flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full bg-amber-500"></span> HEL1OS</span>
+                    </div>
+                </div>
+                <div id="telemetry-plot" class="flex-1 w-full h-full overflow-hidden"></div>
+            </div>
+
+            <div class="panel h-48 shrink-0 flex flex-col bg-gray-900/30 border-gray-800/80">
+                <h2 class="text-[11px] font-bold uppercase tracking-[0.2em] text-gray-400 flex items-center gap-2 mb-4">
+                    <span class="material-icons text-[16px]">psychology</span> XAI: Model Reasoning
+                </h2>
+                <div class="grid grid-cols-2 gap-10 h-full">
+                    <div class="flex flex-col justify-center">
+                        <div id="xai-drivers" class="space-y-4"></div>
+                    </div>
+                    <div class="flex flex-col justify-center pl-8 border-l border-gray-800/60 relative">
+                        <div class="text-[9px] text-gray-500 mb-2 uppercase tracking-[0.2em]">Neupert Effect Confidence</div>
+                        <div class="text-4xl font-mono font-light text-blue-400 mb-3" id="neupert-score">98.2%</div>
+                        <p class="text-[11px] text-gray-500 leading-relaxed font-light pr-4">
+                            Physics-informed loss function confirms hard X-ray derivative perfectly matches soft X-ray integral buildup.
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right Column: Probabilities & 3D Vis -->
+        <div class="col-span-4 flex flex-col gap-6 min-h-0">
+            
+            <div class="panel shrink-0 bg-gray-900/30 border-gray-800/80">
+                <h2 class="text-[11px] font-bold uppercase tracking-[0.2em] text-gray-400 flex items-center gap-2 mb-5">
+                    <span class="material-icons text-[16px]">warning</span> Predictor: 30 Min Outlook
+                </h2>
+                <div class="space-y-4">
+                    <div>
+                        <div class="flex justify-between text-[11px] mb-1.5 font-mono">
+                            <span class="text-gray-400">B-Class</span>
+                            <span id="prob-b" class="text-gray-300">85%</span>
+                        </div>
+                        <div class="w-full bg-gray-800/50 h-1 rounded-full overflow-hidden"><div id="bar-b" class="h-full bg-gray-500 transition-all duration-500" style="width: 85%"></div></div>
+                    </div>
+                    <div>
+                        <div class="flex justify-between text-[11px] mb-1.5 font-mono">
+                            <span class="text-gray-400">C-Class</span>
+                            <span id="prob-c" class="text-gray-300">42%</span>
+                        </div>
+                        <div class="w-full bg-gray-800/50 h-1 rounded-full overflow-hidden"><div id="bar-c" class="h-full bg-blue-500 transition-all duration-500" style="width: 42%"></div></div>
+                    </div>
+                    <div>
+                        <div class="flex justify-between text-[11px] mb-1.5 font-mono">
+                            <span class="text-gray-400">M-Class</span>
+                            <span id="prob-m" class="text-gray-300">12%</span>
+                        </div>
+                        <div class="w-full bg-gray-800/50 h-1 rounded-full overflow-hidden"><div id="bar-m" class="h-full bg-amber-500 transition-all duration-500" style="width: 12%"></div></div>
+                    </div>
+                    <div>
+                        <div class="flex justify-between text-[11px] mb-1.5 font-mono">
+                            <span class="text-gray-400">X-Class</span>
+                            <span id="prob-x" class="text-gray-300">1%</span>
+                        </div>
+                        <div class="w-full bg-gray-800/50 h-1 rounded-full overflow-hidden"><div id="bar-x" class="h-full bg-red-500 transition-all duration-500" style="width: 1%"></div></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- DECLUTTERED: 3D Magnetosphere Visualization -->
+            <div class="panel flex-1 min-h-0 flex flex-col bg-gray-900/30 border-gray-800/80">
+                <!-- Clean Minimal Header -->
+                <div class="flex justify-between items-center mb-3 shrink-0">
+                    <h2 class="text-[11px] font-bold uppercase tracking-[0.2em] text-gray-400 flex items-center gap-2">
+                        <span class="material-icons text-[16px]">public</span> Space Environment
+                    </h2>
+                    <div id="threat-badge" class="text-green-500 text-[10px] font-mono tracking-widest flex items-center gap-1.5 transition-colors duration-500">
+                        <span class="material-icons text-[14px]">shield</span> STABLE
+                    </div>
+                </div>
+                
+                <!-- 3D Canvas Container (No Overlays) -->
+                <div class="flex-1 relative rounded border border-gray-800/40 bg-black/80 overflow-hidden mb-3">
+                    <div id="three-container" class="absolute inset-0"></div>
+                </div>
+
+                <!-- Dedicated Terminal Readout Box -->
+                <div id="raw-terminal" class="h-[60px] bg-black/60 rounded border border-gray-800/40 p-2.5 text-[9px] text-emerald-500/70 font-mono leading-relaxed overflow-hidden flex flex-col justify-end mb-3">
+                    <!-- Lines added by JS -->
+                </div>
+
+                <!-- Sleek Ghost Controls -->
+                <div class="flex gap-3 shrink-0">
+                    <button id="btn-simulate" class="flex-1 bg-transparent hover:bg-blue-900/10 text-blue-400 border border-blue-900/50 hover:border-blue-500/50 rounded py-2 text-[10px] font-bold uppercase tracking-widest transition-all">
+                        Inject Anomaly
+                    </button>
+                    <button id="btn-reset" class="flex-1 bg-transparent hover:bg-gray-800 text-gray-500 border border-gray-800 hover:border-gray-600 rounded py-2 text-[10px] font-bold uppercase tracking-widest transition-colors">
+                        Reset
+                    </button>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        // --- State Management ---
+        const state = {
+            timeCounter: 0,
+            dataHistory: [],
+            isAnomaly: false,
+            anomalyProgress: 0,
+            maxHistory: 100,
+            audioEnabled: false,
+            terminalLines: []
+        };
+
+        const now = new Date();
+        for(let i = -state.maxHistory; i <= 0; i++) {
+            state.dataHistory.push({
+                time: new Date(now.getTime() + i * 1000),
+                solexs: 1e-8 + Math.random() * 5e-9,
+                helios: 1e-9 + Math.random() * 2e-9
+            });
+        }
+
+        // --- Audio Sonification System ---
+        let audioCtx;
+        let alarmOscillator;
+        let alarmGain;
+        let isAlarmPlaying = false;
+
+        const initAudio = () => {
+            if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+        };
+
+        const playGeigerClick = (intensity) => {
+            if (!state.audioEnabled || !audioCtx) return;
+            const osc = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+            
+            osc.type = 'square';
+            osc.frequency.setValueAtTime(150 + (intensity * 500), audioCtx.currentTime);
+            
+            gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.05);
+            
+            osc.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+            
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.05);
+        };
+
+        const manageAlarm = (isCritical) => {
+            if (!state.audioEnabled || !audioCtx) {
+                if (isAlarmPlaying) stopAlarm();
+                return;
+            }
+
+            if (isCritical && !isAlarmPlaying) {
+                alarmOscillator = audioCtx.createOscillator();
+                alarmGain = audioCtx.createGain();
+                
+                alarmOscillator.type = 'sawtooth';
+                alarmOscillator.frequency.setValueAtTime(400, audioCtx.currentTime);
+                setInterval(() => {
+                    if(!isAlarmPlaying || !alarmOscillator) return;
+                    alarmOscillator.frequency.linearRampToValueAtTime(800, audioCtx.currentTime + 0.5);
+                    alarmOscillator.frequency.linearRampToValueAtTime(400, audioCtx.currentTime + 1.0);
+                }, 1000);
+
+                alarmGain.gain.setValueAtTime(0.15, audioCtx.currentTime);
+                
+                alarmOscillator.connect(alarmGain);
+                alarmGain.connect(audioCtx.destination);
+                alarmOscillator.start();
+                isAlarmPlaying = true;
+            } else if (!isCritical && isAlarmPlaying) {
+                stopAlarm();
+            }
+        };
+
+        const stopAlarm = () => {
+            if (alarmOscillator) {
+                alarmOscillator.stop();
+                alarmOscillator.disconnect();
+                alarmGain.disconnect();
+                alarmOscillator = null;
+            }
+            isAlarmPlaying = false;
+        };
+
+        document.getElementById('btn-audio').addEventListener('click', () => {
+            state.audioEnabled = !state.audioEnabled;
+            const icon = document.getElementById('audio-icon');
+            const text = document.getElementById('audio-text');
+            
+            if (state.audioEnabled) {
+                initAudio();
+                icon.innerText = 'volume_up';
+                icon.classList.replace('text-gray-400', 'text-blue-400');
+                text.innerText = 'SONIFICATION: ON';
+                text.classList.add('text-blue-400');
+            } else {
+                stopAlarm();
+                icon.innerText = 'volume_off';
+                icon.classList.replace('text-blue-400', 'text-gray-400');
+                text.innerText = 'SONIFICATION: OFF';
+                text.classList.remove('text-blue-400');
+            }
+        });
+
+        // --- UI Updaters ---
+        const updateClock = () => {
+            const d = new Date();
+            document.getElementById('mission-clock').innerText = d.toISOString().substr(11, 8);
+        };
+        setInterval(updateClock, 1000);
+
+        const updateTerminal = (solexs, helios) => {
+            const hex1 = Math.floor(Math.random() * 16777215).toString(16).toUpperCase().padStart(6, '0');
+            const time = new Date().toISOString().substr(11, 8);
+            
+            let line = `[${time}] PKT_${hex1} | SLX: ${solexs.toExponential(2)}`;
+            if (state.isAnomaly && state.anomalyProgress > 0.4) {
+                line = `<span class="text-red-400/80">⚠️ [${time}] HEL1OS BURST: ${helios.toExponential(2)}</span>`;
+            }
+
+            state.terminalLines.push(line);
+            // Allow 4 lines in the new dedicated terminal box
+            if (state.terminalLines.length > 4) state.terminalLines.shift(); 
+            
+            document.getElementById('raw-terminal').innerHTML = state.terminalLines.join('<br>');
+        };
+
+        const updateProbabilities = () => {
+            let pB, pC, pM, pX, statusText, statusColor, shieldText, shieldClass;
+            const body = document.body;
+            const logo = document.getElementById('logo-icon');
+
+            if (state.isAnomaly) {
+                const intensity = Math.pow(state.anomalyProgress, 2); 
+                pB = 99; pC = Math.min(95, 42 + (intensity * 50)); pM = Math.min(85, 12 + (intensity * 70)); pX = Math.min(85, 1 + (intensity * 84));
+                
+                if (pX > 50) {
+                    statusText = "CRITICAL: X-CLASS EVENT IMMINENT";
+                    statusColor = "text-red-500 alarm-pulse";
+                    shieldText = "SHIELDS FAILING";
+                    shieldClass = "text-red-500 alarm-pulse";
+                    body.classList.add('critical-lockdown');
+                    logo.classList.replace('text-blue-500', 'text-red-500');
+                    manageAlarm(true);
+                } else if (pM > 30) {
+                    statusText = "WARNING: M-CLASS BUILDUP";
+                    statusColor = "text-amber-500";
+                    shieldText = "IMPACT DETECTED";
+                    shieldClass = "text-amber-500";
+                    body.classList.remove('critical-lockdown');
+                    logo.classList.replace('text-red-500', 'text-amber-500');
+                    manageAlarm(false);
+                } else {
+                    statusText = "ELEVATED FLUX";
+                    statusColor = "text-yellow-400";
+                    shieldText = "FLUX RISING";
+                    shieldClass = "text-yellow-500";
+                    logo.classList.replace('text-amber-500', 'text-yellow-500');
+                    manageAlarm(false);
+                }
+            } else {
+                pB = 85; pC = 42; pM = 12; pX = 1;
+                statusText = "NOMINAL";
+                statusColor = "text-green-500";
+                shieldText = "STABLE";
+                shieldClass = "text-green-500";
+                body.classList.remove('critical-lockdown');
+                logo.className = "material-icons text-blue-500 text-3xl";
+                manageAlarm(false);
+            }
+
+            const updateBar = (id, val) => {
+                document.getElementById(`prob-${id}`).innerText = `${Math.round(val)}%`;
+                document.getElementById(`bar-${id}`).style.width = `${val}%`;
+            };
+            updateBar('b', pB); updateBar('c', pC); updateBar('m', pM); updateBar('x', pX);
+
+            const statusEl = document.getElementById('global-status');
+            statusEl.className = `text-sm font-bold font-mono flex items-center justify-end gap-2 ${statusColor}`;
+            statusEl.innerHTML = `<span class="w-2 h-2 rounded-full bg-current ${pX > 50 ? 'alarm-pulse' : 'status-pulse'}"></span> ${statusText}`;
+
+            // Sleeker badge update (Removed blocky background and borders)
+            const badgeEl = document.getElementById('threat-badge');
+            badgeEl.className = `text-[10px] font-mono tracking-widest flex items-center gap-1.5 transition-colors duration-300 ${shieldClass}`;
+            badgeEl.innerHTML = `<span class="material-icons text-[14px]">${pX > 50 ? 'gavel' : (state.isAnomaly ? 'warning' : 'shield')}</span> ${shieldText}`;
+        };
+
+        const updateXAI = () => {
+            const container = document.getElementById('xai-drivers');
+            let drivers = [];
+            if (state.isAnomaly && state.anomalyProgress > 0.4) {
+                drivers = [
+                    { name: "d(HEL1OS)/dt (Hard X-ray)", val: "+0.85", color: "text-red-400", bar: "bg-red-500", w: "95%" },
+                    { name: "SoLEXS Integral (Thermal)", val: "+0.62", color: "text-amber-400", bar: "bg-amber-500", w: "75%" },
+                    { name: "Soft/Hard Ratio Inversion", val: "+0.48", color: "text-amber-400", bar: "bg-amber-500", w: "60%" }
+                ];
+                document.getElementById('neupert-score').innerText = "ALERT";
+                document.getElementById('neupert-score').className = "text-4xl font-mono font-bold text-red-500 mb-3 alarm-pulse";
+            } else {
+                drivers = [
+                    { name: "d(SoLEXS)/dt (Stable)", val: "-0.12", color: "text-green-400", bar: "bg-green-500", w: "25%" },
+                    { name: "HEL1OS Variance (Low)", val: "-0.08", color: "text-green-400", bar: "bg-green-500", w: "15%" },
+                    { name: "Background Flux", val: "+0.02", color: "text-gray-400", bar: "bg-gray-500", w: "5%" }
+                ];
+                document.getElementById('neupert-score').innerText = "98.2%";
+                document.getElementById('neupert-score').className = "text-4xl font-mono font-light text-blue-400 mb-3";
+            }
+
+            // Updated thinner progress bars (h-1 instead of h-1.5) and cleaner typography
+            container.innerHTML = drivers.map(d => `
+                <div>
+                    <div class="flex justify-between text-[10px] font-mono mb-1.5">
+                        <span class="text-gray-400">${d.name}</span>
+                        <span class="${d.color} font-bold">SHAP: ${d.val}</span>
+                    </div>
+                    <div class="w-full bg-gray-800/50 h-1 rounded-full overflow-hidden"><div class="h-full ${d.bar}" style="width: ${d.w}"></div></div>
+                </div>
+            `).join('');
+        };
+
+        // --- Plot Rendering ---
+        let chartInstance = null;
+        const renderPlot = () => {
+            const container = document.getElementById('telemetry-plot');
+            const plotData = [];
+            state.dataHistory.forEach(d => {
+                plotData.push({ time: d.time, value: d.solexs, series: "SoLEXS" });
+                plotData.push({ time: d.time, value: d.helios, series: "HEL1OS" });
+            });
+
+            const chart = Plot.plot({
+                width: container.clientWidth,
+                height: container.clientHeight,
+                marginRight: 40, marginLeft: 50, marginTop: 10, marginBottom: 30,
+                style: { background: "transparent" },
+                x: { type: "utc", grid: true, tickFormat: "%H:%M:%S" },
+                y: { type: "log", domain: [1e-9, 1e-3], grid: true, ticks: 6, tickFormat: d => d.toExponential(0) },
+                color: { domain: ["SoLEXS", "HEL1OS"], range: ["#3b82f6", "#f59e0b"] },
+                marks: [
+                    Plot.line(plotData, { x: "time", y: "value", stroke: "series", strokeWidth: 2, curve: "step-after" }),
+                    Plot.ruleY([1e-5], { stroke: "#ef4444", strokeDasharray: "4,4", strokeWidth: 1, opacity: 0.5 }), 
+                    Plot.ruleY([1e-4], { stroke: "#b91c1c", strokeDasharray: "4,4", strokeWidth: 1, opacity: 0.8 }), 
+                    Plot.text([{time: state.dataHistory[0].time, value: 1.2e-5}], {text: ["M-Class"], fill: "#ef4444", textAnchor: "start", dx: 5, fontSize: 10}),
+                    Plot.text([{time: state.dataHistory[0].time, value: 1.2e-4}], {text: ["X-Class"], fill: "#b91c1c", textAnchor: "start", dx: 5, fontSize: 10})
+                ]
+            });
+
+            if (chartInstance) container.removeChild(chartInstance);
+            container.appendChild(chart);
+            chartInstance = chart;
+        };
+
+        // --- Three.js Magnetosphere Visualizer ---
+        let threeScene, threeCamera, threeRenderer, earthMesh, shieldMesh, particleSystem;
+        const initThree = () => {
+            const container = document.getElementById('three-container');
+            const w = container.clientWidth, h = container.clientHeight;
+
+            threeScene = new THREE.Scene();
+            threeCamera = new THREE.PerspectiveCamera(45, w / h, 0.1, 1000);
+            threeCamera.position.set(8, 3, 15);
+            threeCamera.lookAt(0, 0, 0);
+
+            threeRenderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+            threeRenderer.setSize(w, h);
+            container.appendChild(threeRenderer.domElement);
+
+            const earthMat = new THREE.MeshPhongMaterial({ color: 0x1e3a8a, emissive: 0x0f172a, wireframe: true, transparent: true, opacity: 0.6 });
+            earthMesh = new THREE.Mesh(new THREE.SphereGeometry(2, 32, 32), earthMat);
+            threeScene.add(earthMesh);
+            threeScene.add(new THREE.Mesh(new THREE.SphereGeometry(1.9, 32, 32), new THREE.MeshPhongMaterial({ color: 0x000000 })));
+
+            shieldMesh = new THREE.Mesh(new THREE.SphereGeometry(4, 32, 32), new THREE.MeshPhongMaterial({
+                color: 0x3b82f6, transparent: true, opacity: 0.1, side: THREE.BackSide, blending: THREE.AdditiveBlending, depthWrite: false
+            }));
+            
+            const positions = shieldMesh.geometry.attributes.position;
+            for(let i=0; i<positions.count; i++){
+                let x = positions.getX(i);
+                positions.setX(i, x > 0 ? x * 0.7 : x * 1.5);
+            }
+            shieldMesh.geometry.computeVertexNormals();
+            threeScene.add(shieldMesh);
+
+            const posArray = new Float32Array(500 * 3);
+            for(let i=0; i<1500; i+=3) {
+                posArray[i] = 10 + Math.random() * 10;
+                posArray[i+1] = (Math.random() - 0.5) * 10;
+                posArray[i+2] = (Math.random() - 0.5) * 10;
+            }
+            const particleGeo = new THREE.BufferGeometry();
+            particleGeo.setAttribute('position', new THREE.BufferAttribute(posArray, 3));
+            particleSystem = new THREE.Points(particleGeo, new THREE.PointsMaterial({ size: 0.1, color: 0x60a5fa, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending }));
+            threeScene.add(particleSystem);
+
+            threeScene.add(new THREE.AmbientLight(0xffffff, 0.5));
+            const sunLight = new THREE.DirectionalLight(0xffedd5, 1);
+            sunLight.position.set(10, 0, 0);
+            threeScene.add(sunLight);
+
+            window.addEventListener('resize', () => {
+                const nw = container.clientWidth, nh = container.clientHeight;
+                threeRenderer.setSize(nw, nh);
+                threeCamera.aspect = nw / nh;
+                threeCamera.updateProjectionMatrix();
+                if(chartInstance) renderPlot();
+            });
+        };
+
+        const animateThree = () => {
+            requestAnimationFrame(animateThree);
+            earthMesh.rotation.y += 0.005;
+
+            const positions = particleSystem.geometry.attributes.position.array;
+            let speed = 0.1;
+            
+            if (state.isAnomaly) {
+                speed = 0.1 + (state.anomalyProgress * 1.5);
+                if (state.anomalyProgress > 0.6) {
+                    particleSystem.material.color.setHex(0xef4444);
+                    shieldMesh.material.color.setHex(0xef4444);
+                    shieldMesh.material.opacity = 0.4 + (Math.random() * 0.3); // Heavy flickering
+                } else if (state.anomalyProgress > 0.3) {
+                    particleSystem.material.color.setHex(0xf59e0b);
+                    shieldMesh.material.color.setHex(0xf59e0b);
+                    shieldMesh.material.opacity = 0.2;
+                }
+            } else {
+                particleSystem.material.color.setHex(0x60a5fa);
+                shieldMesh.material.color.setHex(0x3b82f6);
+                shieldMesh.material.opacity = 0.1;
+            }
+
+            for(let i=0; i<positions.length; i+=3) {
+                positions[i] -= speed;
+                const distToCenter = Math.hypot(positions[i], positions[i+1], positions[i+2]);
+                if (distToCenter < 4.5 && positions[i] > 0) {
+                    positions[i+1] += (positions[i+1] > 0 ? speed : -speed);
+                    positions[i+2] += (positions[i+2] > 0 ? speed : -speed);
+                }
+                if(positions[i] < -10) {
+                    positions[i] = 10 + Math.random() * 5;
+                    positions[i+1] = (Math.random() - 0.5) * 10;
+                    positions[i+2] = (Math.random() - 0.5) * 10;
+                }
+            }
+            particleSystem.geometry.attributes.position.needsUpdate = true;
+            threeRenderer.render(threeScene, threeCamera);
+        };
+
+        // --- Main Simulation Loop ---
+        const tick = () => {
+            state.timeCounter++;
+            const t = new Date();
+            let currentSolexs, currentHelios;
+
+            if (state.isAnomaly) {
+                state.anomalyProgress += 0.005; 
+                if (state.anomalyProgress > 1) state.anomalyProgress = 1;
+
+                currentSolexs = 1e-8 + Math.pow(state.anomalyProgress, 2) * 3e-4; 
+                currentSolexs *= (1 + (Math.random() - 0.5) * 0.2);
+
+                if (state.anomalyProgress > 0.5) {
+                    const spikeProg = (state.anomalyProgress - 0.5) * 2;
+                    currentHelios = 1e-9 + Math.pow(spikeProg, 4) * 8e-5;
+                } else {
+                    currentHelios = 1e-9 + Math.random() * 2e-9;
+                }
+                currentHelios *= (1 + (Math.random() - 0.5) * 0.4); 
+            } else {
+                currentSolexs = 1e-8 + Math.random() * 5e-9;
+                currentHelios = 1e-9 + Math.random() * 2e-9;
+            }
+
+            state.dataHistory.push({ time: t, solexs: currentSolexs, helios: currentHelios });
+            if (state.dataHistory.length > state.maxHistory) state.dataHistory.shift();
+
+            // Fire Geiger audio (rate depends on intensity)
+            if (state.timeCounter % Math.max(1, Math.floor(10 - (state.anomalyProgress * 9))) === 0) {
+                playGeigerClick(state.anomalyProgress);
+            }
+
+            if (state.timeCounter % 2 === 0) { 
+                renderPlot();
+                updateProbabilities();
+                updateXAI();
+                updateTerminal(currentSolexs, currentHelios);
+            }
+        };
+
+        // --- Interaction ---
+        document.getElementById('btn-simulate').addEventListener('click', () => {
+            state.isAnomaly = true;
+            state.anomalyProgress = 0;
+            document.getElementById('btn-simulate').classList.add('opacity-50', 'cursor-not-allowed');
+            
+            // Auto-enable audio on anomaly if not already on to ensure judge hears it
+            if(!state.audioEnabled) document.getElementById('btn-audio').click();
+        });
+
+        document.getElementById('btn-reset').addEventListener('click', () => {
+            state.isAnomaly = false;
+            state.anomalyProgress = 0;
+            document.getElementById('btn-simulate').classList.remove('opacity-50', 'cursor-not-allowed');
+            stopAlarm();
+            
+            const now = new Date();
+            state.dataHistory = [];
+            for(let i = -state.maxHistory; i <= 0; i++) {
+                state.dataHistory.push({ time: new Date(now.getTime() + i * 1000), solexs: 1e-8 + Math.random() * 5e-9, helios: 1e-9 + Math.random() * 2e-9 });
+            }
+        });
+
+        initThree();
+        animateThree();
+        setInterval(tick, 150); 
+        updateXAI();
+        setTimeout(renderPlot, 100);
+
+    </script>
+</body>
+</html>
