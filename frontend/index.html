@@ -21,8 +21,6 @@
             --border-color: #1f2937;
             --text-main: #f3f4f6;
             --text-muted: #9ca3af;
-            --solexs-color: #3b82f6; 
-            --helios-color: #f59e0b; 
         }
 
         body {
@@ -71,7 +69,7 @@
             background-color: var(--bg-panel);
             border: 1px solid var(--border-color);
             border-radius: 12px;
-            padding: 20px; /* Slightly increased for breathing room */
+            padding: 20px; 
             box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
             display: flex;
             flex-direction: column;
@@ -94,7 +92,6 @@
         .plot-chart text { fill: var(--text-muted) !important; font-family: 'JetBrains Mono', monospace !important; font-size: 10px !important; }
         .plot-chart [aria-label="grid"] line { stroke: #374151 !important; }
 
-        /* Lock down specific HUD styling */
         .critical-lockdown #raw-terminal { border-color: rgba(239, 68, 68, 0.5); color: #fca5a5; }
     </style>
 </head>
@@ -108,7 +105,8 @@
             </div>
         </div>
         <div class="flex items-center gap-6">
-            <button id="btn-audio" class="flex items-center gap-2 text-xs font-mono bg-gray-800 hover:bg-gray-700 px-3 py-1 rounded border border-gray-600 transition-colors">
+            <!-- Ensure this is prominently clickable for the user gesture -->
+            <button id="btn-audio" class="flex items-center gap-2 text-xs font-mono bg-gray-800 hover:bg-gray-700 px-3 py-1 rounded border border-gray-600 transition-colors z-50 relative cursor-pointer">
                 <span class="material-icons text-[16px] text-gray-400" id="audio-icon">volume_off</span>
                 <span id="audio-text">SONIFICATION: OFF</span>
             </button>
@@ -201,9 +199,8 @@
                 </div>
             </div>
 
-            <!-- DECLUTTERED: 3D Magnetosphere Visualization -->
+            <!-- 3D Magnetosphere Visualization -->
             <div class="panel flex-1 min-h-0 flex flex-col bg-gray-900/30 border-gray-800/80">
-                <!-- Clean Minimal Header -->
                 <div class="flex justify-between items-center mb-3 shrink-0">
                     <h2 class="text-[11px] font-bold uppercase tracking-[0.2em] text-gray-400 flex items-center gap-2">
                         <span class="material-icons text-[16px]">public</span> Space Environment
@@ -213,22 +210,19 @@
                     </div>
                 </div>
                 
-                <!-- 3D Canvas Container (No Overlays) -->
                 <div class="flex-1 relative rounded border border-gray-800/40 bg-black/80 overflow-hidden mb-3">
-                    <div id="three-container" class="absolute inset-0"></div>
+                    <div id="three-container" class="absolute inset-0 z-0 pointer-events-none"></div>
                 </div>
 
-                <!-- Dedicated Terminal Readout Box -->
                 <div id="raw-terminal" class="h-[60px] bg-black/60 rounded border border-gray-800/40 p-2.5 text-[9px] text-emerald-500/70 font-mono leading-relaxed overflow-hidden flex flex-col justify-end mb-3">
                     <!-- Lines added by JS -->
                 </div>
 
-                <!-- Sleek Ghost Controls -->
-                <div class="flex gap-3 shrink-0">
-                    <button id="btn-simulate" class="flex-1 bg-transparent hover:bg-blue-900/10 text-blue-400 border border-blue-900/50 hover:border-blue-500/50 rounded py-2 text-[10px] font-bold uppercase tracking-widest transition-all">
+                <div class="flex gap-3 shrink-0 z-50 relative">
+                    <button id="btn-simulate" class="flex-1 bg-transparent hover:bg-blue-900/30 text-blue-400 border border-blue-900/50 hover:border-blue-500/50 rounded py-2 text-[10px] font-bold uppercase tracking-widest transition-all cursor-pointer">
                         Inject Anomaly
                     </button>
-                    <button id="btn-reset" class="flex-1 bg-transparent hover:bg-gray-800 text-gray-500 border border-gray-800 hover:border-gray-600 rounded py-2 text-[10px] font-bold uppercase tracking-widest transition-colors">
+                    <button id="btn-reset" class="flex-1 bg-transparent hover:bg-gray-800 text-gray-500 border border-gray-800 hover:border-gray-600 rounded py-2 text-[10px] font-bold uppercase tracking-widest transition-colors cursor-pointer">
                         Reset
                     </button>
                 </div>
@@ -245,7 +239,8 @@
             anomalyProgress: 0,
             maxHistory: 100,
             audioEnabled: false,
-            terminalLines: []
+            terminalLines: [],
+            aiPredictions: null 
         };
 
         const now = new Date();
@@ -257,33 +252,75 @@
             });
         }
 
-        // --- Audio Sonification System ---
-        let audioCtx;
-        let alarmOscillator;
-        let alarmGain;
-        let isAlarmPlaying = false;
+        // --- EXPLICIT FETCH TO 127.0.0.1 BACKEND ---
+        const fetchAIPrediction = async (solexs, helios) => {
+            let ml_derivative = 0;
+            let ml_ratio = 15;
+            
+            if (state.isAnomaly) {
+                ml_derivative = state.anomalyProgress * 5.0; 
+                ml_ratio = 10 + (state.anomalyProgress * 90); 
+            }
 
-        const initAudio = () => {
-            if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-            if (audioCtx.state === 'suspended') audioCtx.resume();
+            try {
+                const response = await fetch('http://127.0.0.1:8000/api/predict', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        soft_xray_counts: solexs * 1e9,
+                        soft_xray_derivative: ml_derivative,
+                        soft_to_hard_ratio: ml_ratio
+                    })
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.status === "success" || data.source === "real_time_ai_inference") {
+                        state.aiPredictions = data; 
+                    }
+                }
+            } catch (err) {
+                console.warn("Backend API not connected. Start Uvicorn!", err);
+                state.aiPredictions = null;
+            }
+        };
+
+        // --- SAFARI-PROOF HARDWARE AUDIO ENGINE ---
+        let audioCtx, alarmOscillator, alarmGain, isAlarmPlaying = false;
+
+        const initAudio = async () => {
+            if (!audioCtx) {
+                const AudioContext = window.AudioContext || window.webkitAudioContext;
+                audioCtx = new AudioContext();
+            }
+            if (audioCtx.state === 'suspended') {
+                await audioCtx.resume();
+            }
+            console.log("Audio Engine Activated. State:", audioCtx.state);
         };
 
         const playGeigerClick = (intensity) => {
             if (!state.audioEnabled || !audioCtx) return;
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+
             const osc = audioCtx.createOscillator();
             const gainNode = audioCtx.createGain();
             
-            osc.type = 'square';
-            osc.frequency.setValueAtTime(150 + (intensity * 500), audioCtx.currentTime);
+            // SAFARI FIX: Add a 50ms buffer to the start time
+            const t = audioCtx.currentTime + 0.05;
             
-            gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
-            gainNode.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.05);
+            osc.type = 'sine';
+            osc.frequency.value = 600 + (intensity * 1000); 
+            
+            // Anchor the gain securely before ramping to prevent Safari glitches
+            gainNode.gain.setValueAtTime(0.5, t);
+            gainNode.gain.exponentialRampToValueAtTime(0.001, t + 0.1);
             
             osc.connect(gainNode);
             gainNode.connect(audioCtx.destination);
             
-            osc.start();
-            osc.stop(audioCtx.currentTime + 0.05);
+            osc.start(t);
+            osc.stop(t + 0.1);
         };
 
         const manageAlarm = (isCritical) => {
@@ -296,19 +333,21 @@
                 alarmOscillator = audioCtx.createOscillator();
                 alarmGain = audioCtx.createGain();
                 
-                alarmOscillator.type = 'sawtooth';
-                alarmOscillator.frequency.setValueAtTime(400, audioCtx.currentTime);
-                setInterval(() => {
-                    if(!isAlarmPlaying || !alarmOscillator) return;
-                    alarmOscillator.frequency.linearRampToValueAtTime(800, audioCtx.currentTime + 0.5);
-                    alarmOscillator.frequency.linearRampToValueAtTime(400, audioCtx.currentTime + 1.0);
-                }, 1000);
+                // SAFARI FIX: Buffer time
+                const t = audioCtx.currentTime + 0.05;
 
-                alarmGain.gain.setValueAtTime(0.15, audioCtx.currentTime);
+                alarmOscillator.type = 'square';
+                alarmOscillator.frequency.value = 600;
                 
+                for(let i = 0; i < 60; i++) {
+                    alarmOscillator.frequency.setValueAtTime(600, t + i);
+                    alarmOscillator.frequency.linearRampToValueAtTime(900, t + i + 0.5);
+                }
+
+                alarmGain.gain.setValueAtTime(0.2, t);
                 alarmOscillator.connect(alarmGain);
                 alarmGain.connect(audioCtx.destination);
-                alarmOscillator.start();
+                alarmOscillator.start(t);
                 isAlarmPlaying = true;
             } else if (!isCritical && isAlarmPlaying) {
                 stopAlarm();
@@ -325,13 +364,30 @@
             isAlarmPlaying = false;
         };
 
-        document.getElementById('btn-audio').addEventListener('click', () => {
+        // --- BUTTON LISTENER WITH TEST BEEP ---
+        document.getElementById('btn-audio').addEventListener('click', async () => {
             state.audioEnabled = !state.audioEnabled;
             const icon = document.getElementById('audio-icon');
             const text = document.getElementById('audio-text');
             
             if (state.audioEnabled) {
-                initAudio();
+                await initAudio(); 
+                
+                // SAFARI FIX: Buffered Test Beep
+                const t = audioCtx.currentTime + 0.05;
+                const testOsc = audioCtx.createOscillator();
+                const testGain = audioCtx.createGain();
+                
+                testOsc.type = 'sine';
+                testOsc.frequency.value = 880; 
+                testGain.gain.setValueAtTime(0.5, t);
+                testGain.gain.exponentialRampToValueAtTime(0.001, t + 0.2); // Smooth fade
+                
+                testOsc.connect(testGain);
+                testGain.connect(audioCtx.destination);
+                testOsc.start(t);
+                testOsc.stop(t + 0.2); 
+                
                 icon.innerText = 'volume_up';
                 icon.classList.replace('text-gray-400', 'text-blue-400');
                 text.innerText = 'SONIFICATION: ON';
@@ -347,8 +403,7 @@
 
         // --- UI Updaters ---
         const updateClock = () => {
-            const d = new Date();
-            document.getElementById('mission-clock').innerText = d.toISOString().substr(11, 8);
+            document.getElementById('mission-clock').innerText = new Date().toISOString().substr(11, 8);
         };
         setInterval(updateClock, 1000);
 
@@ -362,9 +417,7 @@
             }
 
             state.terminalLines.push(line);
-            // Allow 4 lines in the new dedicated terminal box
             if (state.terminalLines.length > 4) state.terminalLines.shift(); 
-            
             document.getElementById('raw-terminal').innerHTML = state.terminalLines.join('<br>');
         };
 
@@ -373,20 +426,26 @@
             const body = document.body;
             const logo = document.getElementById('logo-icon');
 
-            if (state.isAnomaly) {
-                const intensity = Math.pow(state.anomalyProgress, 2); 
-                pB = 99; pC = Math.min(95, 42 + (intensity * 50)); pM = Math.min(85, 12 + (intensity * 70)); pX = Math.min(85, 1 + (intensity * 84));
+            // --- USE REAL AI RESPONSES ---
+            if (state.aiPredictions && state.aiPredictions.threat_levels) {
+                const tl = state.aiPredictions.threat_levels;
+                pB = tl.b_class;
+                pC = tl.c_class;
+                pM = tl.m_class;
+                pX = tl.x_class;
                 
-                if (pX > 50) {
-                    statusText = "CRITICAL: X-CLASS EVENT IMMINENT";
+                const globalState = state.aiPredictions.global_state;
+
+                if (globalState === "CRITICAL") {
+                    statusText = "AI ALERT: X-CLASS IMMINENT";
                     statusColor = "text-red-500 alarm-pulse";
                     shieldText = "SHIELDS FAILING";
                     shieldClass = "text-red-500 alarm-pulse";
                     body.classList.add('critical-lockdown');
                     logo.classList.replace('text-blue-500', 'text-red-500');
                     manageAlarm(true);
-                } else if (pM > 30) {
-                    statusText = "WARNING: M-CLASS BUILDUP";
+                } else if (globalState === "WARNING") {
+                    statusText = "AI WARNING: M-CLASS BUILDUP";
                     statusColor = "text-amber-500";
                     shieldText = "IMPACT DETECTED";
                     shieldClass = "text-amber-500";
@@ -394,22 +453,55 @@
                     logo.classList.replace('text-red-500', 'text-amber-500');
                     manageAlarm(false);
                 } else {
-                    statusText = "ELEVATED FLUX";
-                    statusColor = "text-yellow-400";
-                    shieldText = "FLUX RISING";
-                    shieldClass = "text-yellow-500";
-                    logo.classList.replace('text-amber-500', 'text-yellow-500');
+                    statusText = "AI NOMINAL";
+                    statusColor = "text-green-500";
+                    shieldText = "STABLE";
+                    shieldClass = "text-green-500";
+                    body.classList.remove('critical-lockdown');
+                    logo.className = "material-icons text-blue-500 text-3xl";
                     manageAlarm(false);
                 }
-            } else {
-                pB = 85; pC = 42; pM = 12; pX = 1;
-                statusText = "NOMINAL";
-                statusColor = "text-green-500";
-                shieldText = "STABLE";
-                shieldClass = "text-green-500";
-                body.classList.remove('critical-lockdown');
-                logo.className = "material-icons text-blue-500 text-3xl";
-                manageAlarm(false);
+            } 
+            // --- FALLBACK (If FastAPI Server is Offline) ---
+            else {
+                if (state.isAnomaly) {
+                    const intensity = Math.pow(state.anomalyProgress, 2); 
+                    pB = 99; pC = Math.min(95, 42 + (intensity * 50)); pM = Math.min(85, 12 + (intensity * 70)); pX = Math.min(85, 1 + (intensity * 84));
+                    
+                    if (pX > 50) {
+                        statusText = "CRITICAL: X-CLASS IMMINENT";
+                        statusColor = "text-red-500 alarm-pulse";
+                        shieldText = "SHIELDS FAILING";
+                        shieldClass = "text-red-500 alarm-pulse";
+                        body.classList.add('critical-lockdown');
+                        logo.classList.replace('text-blue-500', 'text-red-500');
+                        manageAlarm(true);
+                    } else if (pM > 30) {
+                        statusText = "WARNING: M-CLASS BUILDUP";
+                        statusColor = "text-amber-500";
+                        shieldText = "IMPACT DETECTED";
+                        shieldClass = "text-amber-500";
+                        body.classList.remove('critical-lockdown');
+                        logo.classList.replace('text-red-500', 'text-amber-500');
+                        manageAlarm(false);
+                    } else {
+                        statusText = "ELEVATED FLUX";
+                        statusColor = "text-yellow-400";
+                        shieldText = "FLUX RISING";
+                        shieldClass = "text-yellow-500";
+                        logo.classList.replace('text-amber-500', 'text-yellow-500');
+                        manageAlarm(false);
+                    }
+                } else {
+                    pB = 85; pC = 42; pM = 12; pX = 1;
+                    statusText = "NOMINAL";
+                    statusColor = "text-green-500";
+                    shieldText = "STABLE";
+                    shieldClass = "text-green-500";
+                    body.classList.remove('critical-lockdown');
+                    logo.className = "material-icons text-blue-500 text-3xl";
+                    manageAlarm(false);
+                }
             }
 
             const updateBar = (id, val) => {
@@ -422,7 +514,6 @@
             statusEl.className = `text-sm font-bold font-mono flex items-center justify-end gap-2 ${statusColor}`;
             statusEl.innerHTML = `<span class="w-2 h-2 rounded-full bg-current ${pX > 50 ? 'alarm-pulse' : 'status-pulse'}"></span> ${statusText}`;
 
-            // Sleeker badge update (Removed blocky background and borders)
             const badgeEl = document.getElementById('threat-badge');
             badgeEl.className = `text-[10px] font-mono tracking-widest flex items-center gap-1.5 transition-colors duration-300 ${shieldClass}`;
             badgeEl.innerHTML = `<span class="material-icons text-[14px]">${pX > 50 ? 'gavel' : (state.isAnomaly ? 'warning' : 'shield')}</span> ${shieldText}`;
@@ -449,7 +540,6 @@
                 document.getElementById('neupert-score').className = "text-4xl font-mono font-light text-blue-400 mb-3";
             }
 
-            // Updated thinner progress bars (h-1 instead of h-1.5) and cleaner typography
             container.innerHTML = drivers.map(d => `
                 <div>
                     <div class="flex justify-between text-[10px] font-mono mb-1.5">
@@ -619,9 +709,15 @@
             state.dataHistory.push({ time: t, solexs: currentSolexs, helios: currentHelios });
             if (state.dataHistory.length > state.maxHistory) state.dataHistory.shift();
 
-            // Fire Geiger audio (rate depends on intensity)
+            // Fire Geiger audio
             if (state.timeCounter % Math.max(1, Math.floor(10 - (state.anomalyProgress * 9))) === 0) {
                 playGeigerClick(state.anomalyProgress);
+            }
+
+            // --- FETCH AI DATA FROM BACKEND ---
+            // Triggers roughly every 750 milliseconds
+            if (state.timeCounter % 5 === 0) {
+                fetchAIPrediction(currentSolexs, currentHelios);
             }
 
             if (state.timeCounter % 2 === 0) { 
@@ -636,16 +732,15 @@
         document.getElementById('btn-simulate').addEventListener('click', () => {
             state.isAnomaly = true;
             state.anomalyProgress = 0;
-            document.getElementById('btn-simulate').classList.add('opacity-50', 'cursor-not-allowed');
             
-            // Auto-enable audio on anomaly if not already on to ensure judge hears it
-            if(!state.audioEnabled) document.getElementById('btn-audio').click();
+            // NOTE: Do NOT programmatically click the audio button here anymore.
+            // Users MUST physically click the 'SONIFICATION: OFF' button first for sound to work!
         });
 
         document.getElementById('btn-reset').addEventListener('click', () => {
             state.isAnomaly = false;
             state.anomalyProgress = 0;
-            document.getElementById('btn-simulate').classList.remove('opacity-50', 'cursor-not-allowed');
+            state.aiPredictions = null; // Clear AI State
             stopAlarm();
             
             const now = new Date();
