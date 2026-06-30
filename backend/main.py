@@ -9,14 +9,13 @@ import sys
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(BASE_DIR)
 
-# Import the new, modular Inference Engine Controller
-# This single import brings in the model, physics rules, and XAI logic.
+# Import the Inference Engine Controller
 from ml_engine.inference import FlarePredictorEngine
 
 # --- App & Resource Initialization ---
 app = FastAPI(
     title="Aditya-L1 S.F.E.W.S Enterprise API",
-    description="Modular Backend for Solar Flare Early Warning System"
+    description="Backend for Solar Flare Early Warning System"
 )
 
 # Allow CORS so your frontend (localhost:8080) can communicate with this API (localhost:8000)
@@ -33,14 +32,12 @@ print("⚙️ Initializing Aditya-L1 AI Core...")
 ml_engine = FlarePredictorEngine()
 print("✅ AI Core Online and Ready.")
 
-
 # --- Data Models ---
 # Define the expected incoming JSON data structure from the dashboard
 class TelemetryData(BaseModel):
     soft_xray_counts: float
     soft_xray_derivative: float
     soft_to_hard_ratio: float
-
 
 # --- API Endpoints ---
 @app.get("/")
@@ -52,14 +49,12 @@ def read_root():
 async def predict_flare(data: TelemetryData):
     """
     Main inference endpoint.
-    Receives live telemetry features and passes them to the modular inference engine.
+    Receives live telemetry features and passes them to the inference engine.
     """
     try:
         print(f"\n📡 Received Telemetry: {data}")
         
-        # --- THE FIX ---
         # Safely convert the Pydantic object to a dictionary.
-        # This prevents crashes whether you have Pydantic V1 or V2 installed!
         data_dict = data.model_dump() if hasattr(data, 'model_dump') else data.dict()
         
         # Pass the dictionary to the engine's predict method
@@ -67,12 +62,9 @@ async def predict_flare(data: TelemetryData):
         
         if response.get("status") == "error":
             print(f"⚠️ Engine Error: {response.get('message')}")
-            # Handle physics validation errors (e.g., negative sensor values)
             raise HTTPException(status_code=400, detail=response.get("message", "Unknown error"))
         
-        # The new inference.py returns raw probabilities, but the frontend UI 
-        # needs the granular "threat_levels" to draw the progress bars.
-        # We reconstruct them here so the UI doesn't crash and fall back.
+        # Reconstruct threat levels for the frontend UI progress bars
         flare_prob = response.get("probabilities", {}).get("flare", 0)
         quiet_prob = response.get("probabilities", {}).get("quiet", 100)
         
@@ -83,6 +75,9 @@ async def predict_flare(data: TelemetryData):
             "x_class": flare_prob * 0.2 if flare_prob > 80 else 1.0 
         }
         
+        # Expose the 1-2 year macro forecast from the AI engine to the UI
+        response["macro_forecast"] = response.get("macro_forecast", {})
+        
         # Add a flag to prove to the frontend that this is real AI data
         response["source"] = "real_time_ai_inference"
         
@@ -90,7 +85,6 @@ async def predict_flare(data: TelemetryData):
         return response
         
     except Exception as e:
-        # If something crashes, print it to the terminal so we can debug it
         print(f"❌ Prediction Error in API: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -98,5 +92,5 @@ if __name__ == "__main__":
     import uvicorn
     # Run the server on port 8000
     print("🚀 Starting Mission Control Server...")
-    # Host 0.0.0.0 makes it accessible on your local network
+    # Because everything is in main.py, we run "main:app"
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
