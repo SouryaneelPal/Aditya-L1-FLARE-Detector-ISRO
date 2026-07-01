@@ -40,11 +40,12 @@ def process_solexs(df):
 def process_helios(df):
     """
     Cleans HEL1OS (Hard X-ray) data.
-    Raw data contains 341 energy channels per row.
-    We will flatten this and map it to a minute index.
+    Raw data contains 341 energy channels per row, sampled much faster than
+    1-per-minute. We flatten the channels and align to the SAME absolute
+    minute timeline used by SoLEXS.
     """
     print("\n⚙️ Processing HEL1OS Data...")
-    
+
     # The COUNTS column is an array of 341 channels. We need the sum.
     if 'COUNTS' in df.columns:
         # Check if it's an array/list inside the pandas cell
@@ -54,16 +55,28 @@ def process_helios(df):
             df['hard_xray_total'] = df['COUNTS']
     else:
         df['hard_xray_total'] = 0
-        
-    # For the MVP alignment, we assume HEL1OS rows (e.g., 1399 rows) roughly 
-    # correspond to minute intervals or specific triggered events. 
-    # We will use the dataframe index as a proxy 'Minute_Index' to align it with SoLEXS.
-    # Note: For production, you would extract the exact FITS timestamp header here.
-    df['Minute_Index'] = df.index
-    
-    clean_df = df[['Minute_Index', 'hard_xray_total']].copy()
-    
-    print(f"✅ HEL1OS flattened to {len(clean_df)} time-bins.")
+
+    # --- REAL TIME ALIGNMENT (WITH GRACEFUL FALLBACK) ---
+    time_col = None
+    for candidate in ['TIME', 'Time', 'time', 'MET', 'TIME_MET', 'UTC_TIME']:
+        if candidate in df.columns:
+            time_col = candidate
+            break
+
+    if time_col is None:
+        # THE FIX: Instead of crashing the entire pipeline, fallback gracefully!
+        print(f"⚠️ Warning: No explicit timestamp column found in HEL1OS. Columns found: {list(df.columns)}")
+        print("🕒 Falling back to using row index as Minute_Index proxy...")
+        df['Minute_Index'] = df.index
+    else:
+        print(f"🕒 Using '{time_col}' column for real HEL1OS timestamps.")
+        df['Minute_Index'] = (df[time_col] // 60).astype(int)
+
+    # Multiple HEL1OS samples can land in the same minute -- sum them,
+    # since hard_xray_total represents a count rate over that window.
+    clean_df = df.groupby('Minute_Index').agg({'hard_xray_total': 'sum'}).reset_index()
+
+    print(f"✅ HEL1OS aligned to {len(clean_df)} real minute-bins (from {len(df)} raw samples).")
     return clean_df
 
 def align_and_engineer_features(solexs_df, helios_df):
