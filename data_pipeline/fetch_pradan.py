@@ -2,6 +2,7 @@ import os
 import glob
 import zipfile
 import pandas as pd
+import numpy as np
 from astropy.io import fits
 from astropy.table import Table
 
@@ -22,58 +23,64 @@ def extract_zips():
 
 def find_and_load_data(instrument_code, instrument_name):
     """
-    Generic function to find extracted data files.
+    Finds and loads data files for the range April 2024 - June 2024.
+    Returns a concatenated DataFrame of all matching files in that period.
     """
-    print(f"\nLooking for {instrument_name} data...")
+    print(f"\nLooking for {instrument_name} data (Apr-Jun 2024)...")
     
-    # --- THE FIX: Force the script to unzip files BEFORE it starts searching ---
     extract_zips()
-    # -------------------------------------------------------------------------
     
     all_items = glob.glob(os.path.join(RAW_DATA_DIR, "**", "*"), recursive=True)
-    files = []
+    matching_files = []
     search_code = instrument_code.lower()
+    
+    # Filter files by name/extension and date pattern (202404, 202405, 202406)
+    valid_months = ['202404', '202405', '202406']
     
     for item in all_items:
         item_lower = item.lower()
         if os.path.isfile(item) and not item_lower.endswith('.zip'):
-            # Looking for SLX, SOLEXS, HLS, or HEL1OS in the file path
             if search_code in item_lower or instrument_name.lower() in item_lower:
                 if not item_lower.endswith(('.xml', '.txt', '.pdf', '.png')):
-                    files.append(item)
+                    if any(month in item_lower for month in valid_months):
+                        matching_files.append(item)
                 
-    if not files:
-        print(f"❌ No {instrument_name} files found! Did you put the zips in data_pipeline/raw_data/?")
+    if not matching_files:
+        print(f"❌ No {instrument_name} files found for Apr-Jun 2024!")
         return None
-        
-    print(f"✅ Found {len(files)} {instrument_name} data files!")
+            
+    print(f"📄 Found {len(matching_files)} files for the target period.")
     
-    first_file = files[0]
-    print(f"📄 Looking inside the first file: {os.path.basename(first_file)}")
-    
-    if first_file.endswith('.csv'):
-        return pd.read_csv(first_file)
-    elif first_file.endswith('.parquet'):
-        return pd.read_parquet(first_file)
-    elif first_file.endswith(('.fits', '.fits.gz', '.lc', '.lc.gz')):
-        print(f"🔭 Parsing {instrument_name} astronomical file using Astropy...")
+    data_frames = []
+    for target_file in matching_files:
         try:
-            with fits.open(first_file) as hdul:
-                data_table = Table(hdul[1].data)
-                df = data_table.to_pandas()
-                print(f"✅ Successfully converted to Pandas DataFrame! Shape: {df.shape}")
-                return df
+            print(f"🔭 Parsing: {os.path.basename(target_file)}")
+            if target_file.endswith('.csv'):
+                df = pd.read_csv(target_file)
+                data_frames.append(df)
+            
+            elif target_file.endswith(('.fits', '.fits.gz', '.pi', '.pi.gz')):
+                with fits.open(target_file) as hdul:
+                    for hdu in hdul:
+                        if isinstance(hdu, (fits.BinTableHDU, fits.TableHDU)):
+                            df = Table(hdu.data).to_pandas()
+                            if 'COUNTS' in df.columns and df['COUNTS'].dtype == 'object':
+                                df['COUNTS'] = df['COUNTS'].apply(lambda x: np.sum(x) if isinstance(x, (list, np.ndarray)) else x)
+                                df['COUNTS'] = pd.to_numeric(df['COUNTS'])
+                            data_frames.append(df)
+                            break # Assume first table is the primary one
         except Exception as e:
-            print(f"❌ Error reading FITS/LC file: {e}")
-            return first_file
-    else:
-        print(f"⚠️ Note: File is a '{first_file.split('.')[-1]}' format. We may need a specific parser.")
-        return first_file
+            print(f"❌ Error reading {os.path.basename(target_file)}: {e}")
+
+    if data_frames:
+        print(f"✅ Successfully combined {len(data_frames)} files.")
+        return pd.concat(data_frames, ignore_index=True)
+    
+    return None
 
 if __name__ == "__main__":
     if not os.path.exists(RAW_DATA_DIR):
         os.makedirs(RAW_DATA_DIR)
-        print(f"Created directory: {RAW_DATA_DIR}")
     else:
         solexs_data = find_and_load_data("SOLEXS", "SoLEXS")
         helios_data = find_and_load_data("hel1os", "HEL1OS")
