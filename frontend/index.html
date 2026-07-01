@@ -93,6 +93,21 @@
         .plot-chart [aria-label="grid"] line { stroke: #374151 !important; }
 
         .critical-lockdown #raw-terminal { border-color: rgba(239, 68, 68, 0.5); color: #fca5a5; }
+
+        /* EMI Glitch Effect */
+        @keyframes glitch {
+            0% { transform: translate(0) }
+            20% { transform: translate(-2px, 2px) }
+            40% { transform: translate(-2px, -2px) }
+            60% { transform: translate(2px, 2px) }
+            80% { transform: translate(2px, -2px) }
+            100% { transform: translate(0) }
+        }
+        .critical-lockdown #raw-terminal,
+        .critical-lockdown #xai-drivers {
+            animation: glitch 0.2s linear infinite;
+            text-shadow: 2px 0 red, -2px 0 blue;
+        }
     </style>
 </head>
 <body>
@@ -260,7 +275,19 @@
             maxHistory: 100,
             audioEnabled: false,
             terminalLines: [],
-            aiPredictions: null 
+            aiPredictions: null,
+            lastGlobalState: null
+        };
+
+        const speakAlert = (message) => {
+            if (!state.audioEnabled || !('speechSynthesis' in window)) return;
+            window.speechSynthesis.cancel(); // stop any current speech
+            const utterance = new SpeechSynthesisUtterance(message);
+            const voices = window.speechSynthesis.getVoices();
+            utterance.voice = voices.find(v => v.name.includes('Google UK English Female') || v.name.includes('Samantha')) || null;
+            utterance.rate = 0.9; // Slightly slower, robotic pace
+            utterance.pitch = 0.8;
+            window.speechSynthesis.speak(utterance);
         };
 
         const now = new Date();
@@ -488,6 +515,9 @@
                     body.classList.add('critical-lockdown');
                     logo.classList.replace('text-blue-500', 'text-red-500');
                     manageAlarm(true);
+                    if (state.lastGlobalState !== "CRITICAL") {
+                        speakAlert("Critical Alert. X-Class Solar Flare Imminent. Brace for impact.");
+                    }
                 } else if (globalState === "WARNING") {
                     statusText = "AI WARNING: M-CLASS BUILDUP";
                     statusColor = "text-amber-500";
@@ -496,6 +526,9 @@
                     body.classList.remove('critical-lockdown');
                     logo.classList.replace('text-red-500', 'text-amber-500');
                     manageAlarm(false);
+                    if (state.lastGlobalState !== "WARNING") {
+                        speakAlert("Warning. M-Class buildup detected in soft X-ray telemetry.");
+                    }
                 } else {
                     statusText = "AI NOMINAL";
                     statusColor = "text-green-500";
@@ -505,6 +538,7 @@
                     logo.className = "material-icons text-blue-500 text-3xl";
                     manageAlarm(false);
                 }
+                state.lastGlobalState = globalState;
                 
                 // Update the Macro Forecast visually
                 if (state.aiPredictions.macro_forecast && document.getElementById('macro-12m')) {
@@ -673,10 +707,18 @@
                 particleSystem.material.color.setHex(0xef4444);
                 shieldMesh.material.color.setHex(0xef4444);
                 shieldMesh.material.opacity = 0.4 + (Math.random() * 0.3); // Heavy flickering
+
+                // Compress the shield under solar pressure
+                shieldMesh.scale.x = 0.8 + (Math.random() * 0.1);
+                earthMesh.material.emissive.setHex(0x450a0a); // Earth glows red
             } else {
                 particleSystem.material.color.setHex(0x60a5fa);
                 shieldMesh.material.color.setHex(0x3b82f6);
                 shieldMesh.material.opacity = 0.1;
+
+                // Relax the shield
+                shieldMesh.scale.x = 1.0;
+                earthMesh.material.emissive.setHex(0x0f172a);
             }
 
             for(let i=0; i<positions.length; i+=3) {
